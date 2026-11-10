@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+
+# photos and composed results never go to GitHub
+captures/
+output/
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+
+# secrets (AWS keys, MQTT passwords)
+*.pem
+secrets*
+config.local.*
+.DS_Store
