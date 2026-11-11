@@ -1,0 +1,11 @@
+paho-mqtt>=2.0
+pyserial>=3.5
+gpiozero>=2.0; platform_machine == "aarch64" or platform_machine == "armv7l"
+
+flask>=3.0
+pillow>=10.0
+qrcode>=7.4
+opencv-python-headless>=4.8
+
+# S3에 올릴 때만 설치한다. 키가 없으면 Node 4는 로컬 저장으로 동작한다.
+# boto3>=1.34

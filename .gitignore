@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+data/
+samples/output/booth_data/
+*.db
+.env
+*.pem
+secrets*
+config.local.*
+.DS_Store
