@@ -1,0 +1,28 @@
+{
+  "verified_on": "PC",
+  "hardware": "라즈베리파이·카메라는 사용하지 않음",
+  "aws": "버킷 환경변수가 없어 로컬 SQLite와 파일 저장으로 검증",
+  "results": [
+    {
+      "file": "vertical_face2_pink.jpg",
+      "session_id": "S20261111-140201",
+      "face_count": 2,
+      "frame_color": "pink",
+      "layout": "vertical",
+      "best_shot": "S20261111-140201_1_front.jpg",
+      "url": "http://127.0.0.1:8080/download/S20261111-140201",
+      "status": "OK"
+    },
+    {
+      "file": "wide_face3_blue.jpg",
+      "session_id": "S20261111-140202",
+      "face_count": 3,
+      "frame_color": "blue",
+      "layout": "wide",
+      "best_shot": "S20261111-140202_2_front.jpg",
+      "url": "http://127.0.0.1:8080/download/S20261111-140202",
+      "status": "OK"
+    }
+  ],
+  "slide_panel": "slide12_samples.png"
+}
