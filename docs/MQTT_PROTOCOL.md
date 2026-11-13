@@ -1,4 +1,4 @@
-# MQTT 통신 규약 (v1)
+# MQTT 통신 규약 (v1.1)
 
 모든 노드는 이 문서의 토픽 이름과 Payload 형식을 따른다. 토픽 이름은 코드에 직접 쓰지 말고 `common/booth_mqtt.py`의 `T` 상수를 사용한다.
 
@@ -75,6 +75,18 @@ SLEEP → IDLE → COUNTDOWN → CAPTURE → (shot 2: COUNTDOWN → CAPTURE) →
 | `ERROR` | 오류 안내, 재시도 대기 |
 
 `layout`: `vertical` (face_count ≤ 2) | `wide` (face_count ≥ 3), 아직 모르면 생략
+
+선택 필드 (v1.1, 키오스크 UI용 — 해당 상태에서만 포함):
+
+| 필드 | 포함되는 상태 | 의미 |
+| --- | --- | --- |
+| `frame_color` | SELECT(선택 중) · COMPOSE · DONE | 현재 선택된 프레임 색상 |
+| `url` | DONE | 다운로드 URL (QR로 표시) |
+| `error` | ERROR | 오류 사유 (예: `"no photo node3"`, `"compose timeout"`) |
+
+- `session_id`가 `null`인 IDLE = WAKE_UP 후 시작 대기, `session_id`가 있는 IDLE = 세션 시작 후 V 사인 대기
+- 시작 버튼(Arduino `BTN:START`)은 제스처 대체 입력: 손바닥(시작) · V 사인(촬영) · 엄지(확정)와 같은 역할
+- 상태별 제한 시간: IDLE 60초 무입력 → SLEEP, 시선 미확보 5초 → 그대로 촬영, 촬영 후 사진 미수신 10초 → ERROR, 프레임 선택 20초 → 현재 선택으로 확정, 합성 30초 → ERROR, DONE 20초 · ERROR 5초 → IDLE
 
 ### 3.4 `booth/vision/gesture`
 
