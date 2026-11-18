@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import sys
 import threading
@@ -28,12 +29,49 @@ class Camera:
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self._lock = threading.Lock()
-        self._frame = None
-        self._seq = 0
-        self._running = True
+        self._init_buffer()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+
+    def _init_buffer(self) -> None:
+        self._lock = threading.Condition()
+        self._frame = None
+        self._seq = 0
+        self._recent = collections.deque(maxlen=4)   # (받은 시각 ms, 프레임)
+        self._running = True
+
+    def _store(self, frame) -> None:
+        ts = now_ms()
+        with self._lock:
+            self._frame = frame
+            self._seq += 1
+            self._recent.append((ts, frame))
+            self._lock.notify_all()
+
+    def frame_near(self, target_ms: int, timeout_s: float = 0.25, after: bool = False):
+        """예약 시각(target_ms)에 맞는 프레임과 그 프레임을 받은 시각 (frame, ts_ms).
+
+        after=False(기본): 직전·직후 중 예약 시각에 더 가까운 프레임 (노드별 오차 ±반 프레임).
+        after=True: 예약 시각 이후 첫 프레임 (노드별 오차 0~1 프레임).
+            11/19 실측 비교: 가까운 프레임 20컷 중 18컷 0~10ms / 이후 첫 프레임 14컷이 25~35ms
+            → 가까운 프레임이 더 나아 기본값으로 둔다.
+        """
+        deadline = time.monotonic() + timeout_s
+        with self._lock:
+            while not (self._recent and self._recent[-1][0] >= target_ms):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                self._lock.wait(left)
+            if not self._recent:
+                return None, None
+            if after:
+                later = [item for item in self._recent if item[0] >= target_ms]
+                if later:
+                    ts, frame = later[0]
+                    return frame, ts
+            ts, frame = min(self._recent, key=lambda item: abs(item[0] - target_ms))
+            return frame, ts
 
     def _loop(self) -> None:
         while self._running:
@@ -41,9 +79,7 @@ class Camera:
             if not ok:
                 time.sleep(0.05)
                 continue
-            with self._lock:
-                self._frame = frame
-                self._seq += 1
+            self._store(frame)
 
     def read(self):
         """(프레임 번호, 프레임). 아직 없으면 (0, None). 프레임은 수정하지 말고 쓴다."""
@@ -69,19 +105,13 @@ class PiCamera(Camera):
             controls={"FrameRate": fps}))
         self._cam.start()
         self.width, self.height = width, height
-        self._lock = threading.Lock()
-        self._frame = None
-        self._seq = 0
-        self._running = True
+        self._init_buffer()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     def _loop(self) -> None:
         while self._running:
-            frame = self._cam.capture_array()
-            with self._lock:
-                self._frame = frame
-                self._seq += 1
+            self._store(self._cam.capture_array())
 
     def close(self) -> None:
         self._running = False
@@ -114,24 +144,24 @@ def schedule_capture(camera: Camera, cmd: dict, *, node: str, angle: str, out_di
         shot = int(cmd.get("shot") or 0)
         capture_at = cmd.get("capture_at") or now_ms()
         wait_s = (capture_at - now_ms()) / 1000.0
-        if wait_s > 0:
-            time.sleep(wait_s)
-        _, frame = camera.read()
-        shot_ts = now_ms()
+        if wait_s > 0.05:
+            time.sleep(wait_s - 0.05)            # 직전 프레임까지 버퍼에 남도록 조금 일찍 깬다
+        frame, shot_ts = camera.frame_near(capture_at)
         if frame is None:
             print(f"[{node}] 촬영 실패: 카메라 프레임이 없습니다.")
             return
         frame = frame.copy()
-        late_ms = shot_ts - capture_at
+        late_ms = shot_ts - capture_at            # 고른 프레임을 받은 시각 - 예약 시각 (자기 시계 기준)
         filename = capture_filename(session_id, shot, angle)
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / filename
         cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        print(f"[{node}] 촬영 {filename} (예약 시각 대비 {late_ms:+d} ms)")
+        print(f"[{node}] 촬영 {filename} (프레임 받은 시각 - 예약 시각 {late_ms:+d} ms)")
 
         info = analyze(frame) if analyze else {}
         fields = dict(session_id=session_id, shot=shot, node=node, angle=angle,
-                      file=filename, **info, ts=shot_ts)
+                      file=filename, **info, capture_at=capture_at, frame_ts=shot_ts,
+                      late_ms=late_ms, ts=shot_ts)
 
         if node4_url:
             try:

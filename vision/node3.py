@@ -3,8 +3,8 @@
     python -m vision.node3 --host 172.20.10.4 --show
     python -m vision.node3 --node4 http://pb-node4.local:5000 --show --with-proximity
 
-구독: booth/session/state, booth/cmd/capture
-발행: booth/status/node3, booth/capture/done (angle=side, 얼굴 분석은 Node 4가 한다)
+구독: booth/session/state, booth/cmd/capture, booth/vision/leader (LCD 표시용)
+발행: booth/status/node3, booth/capture/done (angle=side, 얼굴·미소 분석은 Node 4가 한다)
 
 --with-proximity: 막심 님의 node3_sensor/proximity.py 판정 로직을 이 프로세스 안에서 돌린다.
 proximity.py를 따로 실행하면 같은 "node3" 클라이언트 ID가 둘이 되어 브로커가 한쪽을
@@ -22,6 +22,8 @@ import cv2
 
 from common.booth_mqtt import T, connect, disconnect, make_payload, parse_payload
 from vision.camera import open_camera, schedule_capture
+from vision.faces import FaceDetector
+from vision.smile import SmileScorer
 
 NODE = "node3"
 
@@ -60,6 +62,9 @@ def main() -> None:
     parser.add_argument("--node4", default=None, help="Node 4 주소, 예: http://pb-node4.local:5000")
     parser.add_argument("--show", action="store_true", help="LCD에 미리보기와 상태 표시")
     parser.add_argument("--lcd", default="800x480", help="LCD 해상도 (가로)")
+    parser.add_argument("--smile", default="off", choices=["auto", "mesh", "haar", "off"],
+                        help="보조 사진 미소 지수 (기본 off: Node 4가 추정. Pi 3B는 MediaPipe가 안 돌아 "
+                             "auto여도 Haar가 된다)")
     parser.add_argument("--with-proximity", action="store_true", help="HC-SR04도 같이 돌린다")
     parser.add_argument("--trigger", type=int, default=23)
     parser.add_argument("--echo", type=int, default=24)
@@ -67,8 +72,19 @@ def main() -> None:
 
     camera = open_camera(args.camera, args.width, args.height)
     out_dir = Path(args.out)
+    smile = None if args.smile == "off" else SmileScorer(args.smile)
+    still_detector = FaceDetector() if smile is not None and smile.name == "haar" else None
+
+    def analyze(frame) -> dict:
+        """정면(Node 2)과 같은 점수 기준으로 맞추려고 보조 사진도 여기서 미소 지수를 잰다."""
+        if smile is None:
+            return {}
+        faces = still_detector.detect(frame, max_width=640) if still_detector else []
+        total, _ = smile.score(frame, faces)
+        print(f"[{NODE}] smile_score={total}")
+        return {} if total is None else {"smile_score": total}
     status = {"state": None, "session_id": None, "last_shot": "-", "distance_cm": None,
-              "connected": False}
+              "connected": False, "leader": None}
 
     def on_message(c, userdata, msg):
         data = parse_payload(msg.payload)
@@ -77,13 +93,15 @@ def main() -> None:
         if msg.topic == T.SESSION_STATE:
             status["state"] = data.get("state")
             status["session_id"] = data.get("session_id")
+        elif msg.topic == T.LEADER:
+            status["leader"] = data.get("status")
         elif msg.topic == T.CAPTURE_CMD:
             status["last_shot"] = f"shot {data.get('shot')}"
             schedule_capture(camera, data, node=NODE, angle="side", out_dir=out_dir,
-                             client=c, node4_url=args.node4)
+                             client=c, analyze=analyze, node4_url=args.node4)
 
     client = connect(NODE, args.host, args.port, on_message=on_message,
-                     subscriptions=[(T.SESSION_STATE, 1), (T.CAPTURE_CMD, 1)])
+                     subscriptions=[(T.SESSION_STATE, 1), (T.CAPTURE_CMD, 1), (T.LEADER, 0)])
     client.loop_start()
     if args.with_proximity:
         start_proximity(client, status, args.trigger, args.echo)
@@ -106,6 +124,8 @@ def main() -> None:
             online = client.is_connected()
             lines = [f"MQTT {'online' if online else 'OFFLINE'}  {status['state'] or '-'}",
                      f"last: {status['last_shot']}"]
+            if status["leader"]:
+                lines.append(f"leader: {status['leader']}")
             if status["distance_cm"] is not None:
                 lines.append(f"dist: {status['distance_cm']:.0f} cm")
             for i, text in enumerate(lines):
@@ -119,6 +139,8 @@ def main() -> None:
     finally:
         disconnect(client, NODE)
         client.loop_stop()
+        if smile is not None:
+            smile.close()
         camera.close()
         cv2.destroyAllWindows()
 

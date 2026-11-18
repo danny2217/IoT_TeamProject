@@ -27,6 +27,7 @@ class T:
     GESTURE = "booth/vision/gesture"
     FACES = "booth/vision/faces"
     GAZE = "booth/vision/gaze"
+    LEADER = "booth/vision/leader"      # 대표자 손 (vision 브랜치 추가, v1.2 제안)
     CAPTURE_CMD = "booth/cmd/capture"
     CAPTURE_DONE = "booth/capture/done"
     COMPOSE_REQUEST = "booth/compose/request"
