@@ -96,6 +96,10 @@ class SessionMachine:
             payload["url"] = self.url
         if self.state == ERROR and self.error:
             payload["error"] = self.error
+        if self.state == COUNTDOWN:
+            payload["count"] = self.step          # 3, 2, 1; 0 = waiting for eyes on the lens
+            if self.gaze_warned:
+                payload["gaze_warn"] = True
         self._out.append(("state", payload))
 
     # ------------------------------------------------------------- transitions
@@ -274,10 +278,12 @@ class SessionMachine:
                     if self.step > 0:
                         self._arduino(f"COUNT:{self.step}")
                         self.deadline += self.cfg.countdown_step_s
+                        self._emit_state()          # kiosk shows the same number
                     elif self.gaze_ok is False:
                         self.gaze_warned = True
                         self.deadline = now + self.cfg.gaze_wait_s
                         self._arduino("GAZE:WARN")
+                        self._emit_state()          # kiosk shows "look at the lens"
                     else:
                         self._start_capture()
             else:                                   # waiting for eyes on the lens

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Photo Booth</title>
+<style>
+  :root {
+    --navy: #15212C; --navy2: #1E2D3A; --light: #F5F3EE; --soft: #C9D2DA;
+    --coral: #E2643A; --coral-soft: #F2A285; --blue: #4C8FD6; --ok: #5CC28A; --bad: #E5574B;
+    --font: 'Noto Sans CJK KR', 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--navy); color: var(--light); font-family: var(--font); overflow: hidden; }
+  body { display: flex; flex-direction: column; }
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; text-align: center; padding: 4vh 6vw; position: relative; }
+  .eyebrow { font-size: 2.2vh; letter-spacing: .3vh; color: var(--coral-soft); font-weight: 700; }
+  h1 { font-size: 7vh; font-weight: 700; line-height: 1.2; }
+  .sub { font-size: 3vh; color: var(--soft); line-height: 1.5; }
+  .count { font-size: 42vh; font-weight: 700; line-height: 1; color: var(--light); font-variant-numeric: tabular-nums; animation: pop .9s ease-out; }
+  @keyframes pop { from { transform: scale(1.35); opacity: .2 } to { transform: scale(1); opacity: 1 } }
+  .warn { background: var(--bad); color: #fff; font-size: 6vh; font-weight: 700; padding: 3vh 6vh; border-radius: 3vh; animation: blink 0.5s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .55 } }
+  .eye { width: 20vh; height: 12vh; border: 1.2vh solid var(--light); border-radius: 50%; position: relative; }
+  .eye::after { content: ''; position: absolute; width: 6vh; height: 6vh; border-radius: 50%; background: var(--light); left: 50%; top: 50%; transform: translate(-50%, -50%); }
+  .ring { width: 26vh; height: 26vh; border-radius: 50%; border: .8vh solid var(--coral); animation: breathe 2.6s ease-in-out infinite; display: flex; align-items: center; justify-content: center; font-size: 4vh; font-weight: 700; color: var(--coral-soft); }
+  @keyframes breathe { 50% { transform: scale(1.08); opacity: .6 } }
+  .swatches { display: flex; gap: 3vw; margin-top: 2vh; }
+  .sw { display: flex; flex-direction: column; align-items: center; gap: 1.5vh; font-size: 3vh; color: var(--soft); }
+  .sw .chip { width: 16vh; height: 22vh; border-radius: 2vh; border: .5vh solid rgba(255,255,255,.25); display: flex; align-items: flex-end; justify-content: center; padding-bottom: 1.5vh; font-size: 5vh; font-weight: 700; }
+  .sw.on .chip { outline: 1vh solid var(--coral); outline-offset: 1vh; }
+  .sw.on { color: var(--light); font-weight: 700; }
+  .layout { display: flex; align-items: center; gap: 3vw; margin-top: 1vh; }
+  .preview { display: grid; gap: .8vh; padding: 1.2vh; border-radius: 1.2vh; background: rgba(255,255,255,.08); }
+  .preview div { background: var(--soft); opacity: .7; border-radius: .6vh; }
+  .preview.vertical { grid-template-columns: 7vh; grid-template-rows: repeat(4, 5vh); }
+  .preview.wide { grid-template-columns: repeat(2, 9vh); grid-template-rows: repeat(2, 6.5vh); }
+  .preview .best { background: var(--coral); opacity: 1; }
+  .spinner { width: 14vh; height: 14vh; border-radius: 50%; border: 1.4vh solid rgba(255,255,255,.15); border-top-color: var(--coral); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .qr { background: #fff; padding: 2vh; border-radius: 2vh; width: 46vh; height: 46vh; }
+  .qr img { width: 100%; height: 100%; display: block; }
+  .url { font-size: 2.2vh; color: var(--soft); word-break: break-all; max-width: 70vw; }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  #flash.go { animation: flash .6s ease-out; }
+  @keyframes flash { from { opacity: .95 } to { opacity: 0 } }
+  #bar { display: flex; align-items: center; gap: 2.4vw; padding: 1.6vh 3vw; background: var(--navy2); font-size: 2vh; color: var(--soft); }
+  .node { display: flex; align-items: center; gap: .8vh; }
+  .dot { width: 1.4vh; height: 1.4vh; border-radius: 50%; background: #66717c; }
+  .dot.online { background: var(--ok); } .dot.offline { background: var(--bad); }
+  #bar .spacer { flex: 1; }
+  #lost { position: fixed; top: 2vh; right: 2vw; background: var(--bad); color: #fff; padding: 1vh 2vh; border-radius: 1vh; font-size: 2vh; display: none; }
+  body.sleep #stage { opacity: .85; }
+</style>
+</head>
+<body class="sleep">
+<main id="stage"></main>
+<div id="flash"></div>
+<div id="lost">Node 1 연결 끊김 · 다시 연결 중…</div>
+<footer id="bar">
+  <span class="node"><span class="dot" id="d-node1"></span>Node 1 제어</span>
+  <span class="node"><span class="dot" id="d-node2"></span>Node 2 정면</span>
+  <span class="node"><span class="dot" id="d-node3"></span>Node 3 측면</span>
+  <span class="node"><span class="dot" id="d-node4"></span>Node 4 합성</span>
+  <span class="spacer"></span>
+  <span id="people"></span>
+</footer>
+<script>
+const COLORS = [
+  { n: 1, key: 'white', name: '화이트', bg: '#F7F5F0', fg: '#15212C' },
+  { n: 2, key: 'pink',  name: '핑크',   bg: '#F4A7B9', fg: '#15212C' },
+  { n: 3, key: 'blue',  name: '블루',   bg: '#6FA8DC', fg: '#15212C' },
+  { n: 4, key: 'black', name: '블랙',   bg: '#0E1318', fg: '#F5F3EE' },
+];
+const LAYOUT_NAME = { vertical: '세로 4컷', wide: '2×2 와이드' };
+const ERRORS = {
+  'no photo node2': '정면 카메라 사진을 받지 못했어요',
+  'no photo node3': '측면 카메라 사진을 받지 못했어요',
+  'no photo node2,node3': '카메라 사진을 받지 못했어요',
+  'compose timeout': '합성 서버가 응답하지 않아요',
+};
+const stage = document.getElementById('stage');
+let lastKey = '';
+
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function preview(layout) {
+  if (!layout) return '';
+  const cells = '<div class="best"></div><div></div><div></div><div></div>';
+  return `<div class="layout"><div class="preview ${layout}">${cells}</div>
+          <div class="sub">${LAYOUT_NAME[layout]}</div></div>`;
+}
+
+function screen(s) {
+  const shot = s.shot ? `촬영 ${s.shot} / 2` : '';
+  switch (s.state) {
+    case 'SLEEP':
+      return `<div class="ring">HELLO</div>
+              <h1>다각도 스마트 포토부스</h1>
+              <p class="sub">가까이 다가오면 시작됩니다</p>`;
+    case 'IDLE':
+      if (!s.session_id) return `<p class="eyebrow">반가워요</p>
+              <h1>손바닥을 보여 주세요</h1>
+              <p class="sub">또는 시작 버튼을 눌러 주세요</p>`;
+      return `<p class="eyebrow">준비 완료</p>
+              <h1>V 사인을 보여 주면<br>촬영이 시작돼요</h1>
+              <p class="sub">정면과 측면에서 동시에 2번 촬영합니다</p>${preview(s.layout)}`;
+    case 'COUNTDOWN':
+      if (s.count === 0 && s.gaze_warn) return `<p class="eyebrow">${shot}</p>
+              <div class="eye"></div><div class="warn">렌즈를 봐 주세요!</div>`;
+      return `<p class="eyebrow">${shot}</p><div class="count" data-k="${s.count}">${s.count ?? ''}</div>`;
+    case 'CAPTURE':
+      return `<p class="eyebrow">${shot}</p><h1>찰칵!</h1>
+              <p class="sub">${s.shot < 2 ? '다음 촬영을 준비해 주세요' : '촬영 완료!'}</p>`;
+    case 'SELECT': {
+      const chips = COLORS.map(c => `<div class="sw ${s.frame_color === c.key ? 'on' : ''}">
+          <div class="chip" style="background:${c.bg};color:${c.fg}">${c.n}</div>${c.name}</div>`).join('');
+      return `<p class="eyebrow">프레임 선택</p>
+              <h1>손가락으로 색상을 골라 주세요</h1>
+              <p class="sub">손가락 1–4개 · 엄지로 확정 (버튼도 가능)</p>
+              <div class="swatches">${chips}</div>`;
+    }
+    case 'COMPOSE':
+      return `<div class="spinner"></div><h1>네컷을 만드는 중…</h1>${preview(s.layout)}`;
+    case 'DONE':
+      return `<p class="eyebrow">완성!</p>
+              <div class="qr"><img alt="다운로드 QR 코드" src="/qr.svg?text=${encodeURIComponent(s.url || '')}"
+                   onerror="this.parentNode.style.display='none'"></div>
+              <h1>QR을 찍어 사진을 받아 가세요</h1>
+              <p class="url">${esc(s.url)}</p>`;
+    case 'ERROR':
+      return `<p class="eyebrow">잠시만요</p>
+              <h1>${esc(ERRORS[s.error] || '문제가 생겼어요')}</h1>
+              <p class="sub">잠시 후 처음 화면으로 돌아갑니다 (${esc(s.error)})</p>`;
+    default:
+      return `<h1>${esc(s.state)}</h1>`;
+  }
+}
+
+function render(snap) {
+  const s = snap.session || {};
+  const key = JSON.stringify([s.state, s.session_id, s.shot, s.count, s.gaze_warn, s.frame_color, s.layout, s.url, s.error]);
+  if (key !== lastKey) {
+    if (s.state === 'CAPTURE' && !lastKey.includes('"CAPTURE"')) {
+      const f = document.getElementById('flash');
+      f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+    }
+    lastKey = key;
+    stage.innerHTML = screen(s);
+    document.body.classList.toggle('sleep', s.state === 'SLEEP');
+  }
+  for (const n of ['node1', 'node2', 'node3', 'node4']) {
+    document.getElementById('d-' + n).className = 'dot ' + (snap.nodes?.[n] || '');
+  }
+  const layout = s.layout ? ` · ${LAYOUT_NAME[s.layout]}` : '';
+  document.getElementById('people').textContent =
+    snap.faces != null ? `인원 ${snap.faces}명${layout}` : (layout ? layout.slice(3) : '');
+  document.getElementById('lost').style.display = snap.broker === false ? 'block' : 'none';
+}
+
+function start() {
+  const es = new EventSource('/events');
+  es.onmessage = e => { document.getElementById('lost').style.display = 'none'; render(JSON.parse(e.data)); };
+  es.onerror = () => { document.getElementById('lost').style.display = 'block'; };
+}
+start();
+</script>
+</body>
+</html>

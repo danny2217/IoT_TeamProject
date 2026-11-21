@@ -1,4 +1,4 @@
-# MQTT 통신 규약 (v1.1)
+# MQTT 통신 규약 (v1.2)
 
 모든 노드는 이 문서의 토픽 이름과 Payload 형식을 따른다. 토픽 이름은 코드에 직접 쓰지 말고 `common/booth_mqtt.py`의 `T` 상수를 사용한다.
 
@@ -83,6 +83,8 @@ SLEEP → IDLE → COUNTDOWN → CAPTURE → (shot 2: COUNTDOWN → CAPTURE) →
 | `frame_color` | SELECT(선택 중) · COMPOSE · DONE | 현재 선택된 프레임 색상 |
 | `url` | DONE | 다운로드 URL (QR로 표시) |
 | `error` | ERROR | 오류 사유 (예: `"no photo node3"`, `"compose timeout"`) |
+| `count` | COUNTDOWN | 카운트다운 숫자 3·2·1, 0 = 시선 확인 대기 (v1.2, 숫자가 바뀔 때마다 발행) |
+| `gaze_warn` | COUNTDOWN | `true` = 렌즈를 보라는 경고 중 (v1.2) |
 
 - `session_id`가 `null`인 IDLE = WAKE_UP 후 시작 대기, `session_id`가 있는 IDLE = 세션 시작 후 V 사인 대기
 - 시작 버튼(Arduino `BTN:START`)은 제스처 대체 입력: 손바닥(시작) · V 사인(촬영) · 엄지(확정)와 같은 역할

@@ -280,6 +280,26 @@ class Layout(unittest.TestCase):
         self.assertEqual(h.of("compose")[-1]["frame_color"], "blue")
 
 
+class KioskFields(unittest.TestCase):
+    def test_countdown_numbers_reach_the_kiosk(self):
+        h = Harness()
+        h.send(type="button")
+        h.send(type="button")
+        h.run(3.1)
+        counts = [d["count"] for k, d in h.out if k == "state" and d["state"] == COUNTDOWN]
+        self.assertEqual(counts, [3, 2, 1])
+
+    def test_gaze_warning_reaches_the_kiosk(self):
+        h = Harness()
+        h.send(type="button")
+        h.send(type="button")
+        h.send(type="gaze", gaze_ok=False)
+        h.run(3.1)
+        last = h.of("state")[-1]
+        self.assertEqual((last["state"], last["count"], last.get("gaze_warn")),
+                         (COUNTDOWN, 0, True))
+
+
 class ArduinoText(unittest.TestCase):
     def test_lcd_lines_fit_16_chars(self):
         h = Harness(shots=2, expected_cameras=("node2",))
