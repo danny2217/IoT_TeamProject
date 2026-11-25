@@ -76,12 +76,12 @@ $env:AWS_REGION = "ap-northeast-2"
 pip install boto3
 ```
 
-스키마는 `node4/schema.sql`. 로컬은 SQLite(`data/booth.db` 또는 demo의 `booth_data`)이고, RDS로 옮길 때 같은 컬럼을 쓰면 된다.
+스키마는 `node4/schema.sql`. 로컬은 SQLite(`data/booth.db` 또는 demo의 `booth_data`)이고, RDS로 옮길 때는 같은 컬럼의 `node4/schema_rds.sql`을 쓴다. 결과 객체 키는 `results/{session_id}.jpg`다.
 
 얼굴 좌표가 없고 OpenCV 5라 Haar Cascade가 없으면 `node4/models/face_detection_yunet_2023mar.onnx`를 쓴다. 모델은 [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)에서 받았다.
 
 ## 실기에서 이어서 할 일
 
 1. Node 4(RPi 3B)에서 `python -m node4 serve --host 0.0.0.0 --mqtt`를 실행한다. `common/booth_mqtt.py`는 막심님 브랜치의 파일을 그대로 둔다.
-2. 성환님 HTTP 주소와 위 필드를 맞춘 뒤, 실제 사진 4장으로 한 세션을 돌린다.
+2. 성환님 Node 2는 `POST /api/photos`로 보낸다. 예시 주소가 5000번이면 `python -m node4 serve --host 0.0.0.0 --port 5000 --mqtt`로 맞춘 뒤, 실제 사진 4장으로 한 세션을 돌린다.
 3. AWS 계정이 정해지면 `AWS_S3_BUCKET`과 `BOOTH_PUBLIC_BASE`를 넣고 합성 결과 한 장을 올린다. QR이 그 주소를 담는다.

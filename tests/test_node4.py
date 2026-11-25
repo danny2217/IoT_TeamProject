@@ -49,6 +49,28 @@ def four_shots(scores=(10, 20, 99, 30), face_count=2):
     return shots
 
 
+class SchemaTests(unittest.TestCase):
+    def test_rds_schema_has_the_same_columns(self):
+        sqlite_sql = (ROOT / "node4" / "schema.sql").read_text(encoding="utf-8")
+        rds_sql = (ROOT / "node4" / "schema_rds.sql").read_text(encoding="utf-8")
+        for table, columns in {
+            "shots": [
+                "session_id", "shot", "angle", "node", "filename", "file_path",
+                "face_count", "smile_score", "gaze_ok", "faces_json", "updated_at",
+            ],
+            "sessions": [
+                "session_id", "layout", "frame_color", "face_count", "best_shot",
+                "shot_scores", "file_path", "download_url", "s3_url", "storage",
+                "status", "error", "created_at",
+            ],
+        }.items():
+            for sql in (sqlite_sql, rds_sql):
+                body = sql.split(f"CREATE TABLE IF NOT EXISTS {table}", 1)[1]
+                body = body.split("ENGINE=", 1)[0]
+                for column in columns:
+                    self.assertIn(column, body, f"{table}.{column}")
+
+
 class ComposerTests(unittest.TestCase):
     def test_layout_follows_face_count(self):
         self.assertEqual(layout_for_face_count(0), "vertical")

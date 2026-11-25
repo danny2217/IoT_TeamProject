@@ -1,0 +1,15 @@
+test_best_smile_is_first_slot_and_layout_changes (test_node4.ComposerTests.test_best_smile_is_first_slot_and_layout_changes) ... ok
+test_frame_color_paints_the_border (test_node4.ComposerTests.test_frame_color_paints_the_border) ... ok
+test_layout_follows_face_count (test_node4.ComposerTests.test_layout_follows_face_count) ... ok
+test_missing_shot_names_the_gap (test_node4.ComposerTests.test_missing_shot_names_the_gap) ... ok
+test_offcenter_face_moves_to_the_middle (test_node4.ComposerTests.test_offcenter_face_moves_to_the_middle) ... ok
+test_capture_done_metadata_reaches_compose (test_node4.PipelineTests.test_capture_done_metadata_reaches_compose) ... ok
+test_http_compose_download_and_missing_photo (test_node4.PipelineTests.test_http_compose_download_and_missing_photo) ... ok
+test_rds_schema_has_the_same_columns (test_node4.SchemaTests.test_rds_schema_has_the_same_columns) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.758s
+
+OK
+
+exit 0
