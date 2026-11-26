@@ -7,7 +7,7 @@
 
 구독: booth/session/state, booth/cmd/capture
 발행: booth/status/node2, booth/vision/gesture, booth/vision/faces, booth/vision/leader,
-      booth/capture/done
+      booth/vision/gaze (카운트다운 중 모두 카메라를 보는지), booth/capture/done
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import cv2
 from common.booth_mqtt import T, connect, disconnect, make_payload, parse_payload
 from vision.camera import open_camera, schedule_capture
 from vision.faces import CountDebouncer, FaceDetector
+from vision.gaze import GazeMonitor, gaze_features, is_looking, photo_gaze
 from vision.gestures import ALLOWED, GestureStabilizer, classify
 from vision.hands import create_hand_tracker
 from vision.leader import LOCKED, LeaderTracker
@@ -33,6 +34,8 @@ PROCESS_SIZE = (320, 240)                    # 인식은 저해상도, 촬영은
 FACE_STATES = {None, "IDLE", "COUNTDOWN"}    # 실시간 인원수를 세는 상태
 FACE_INTERVAL_S = 0.3
 LEADER_INTERVAL_S = 0.2                      # 대표자 손 위치 발행 간격(최대 초당 5번)
+GAZE_STATES = {"COUNTDOWN"}                  # 시선을 보는 상태 (Node 1이 3·2·1 끝에 gaze_ok를 확인)
+GAZE_PUB_S = 0.3                             # 시선 발행 간격 (바뀌면 바로, 그대로면 1초마다)
 
 
 class Session:
@@ -80,6 +83,8 @@ def main() -> None:
     parser.add_argument("--show", action="store_true", help="미리보기 창 표시")
     parser.add_argument("--web", type=int, default=None, metavar="PORT",
                         help="모니터가 없을 때: 브라우저로 보는 미리보기 포트 (예: 8080)")
+    parser.add_argument("--gaze", default="on", choices=["on", "off"],
+                        help="시선 셔터: 카운트다운 중 모두 카메라를 보는지 booth/vision/gaze 로 발행")
     parser.add_argument("--dry-run", action="store_true", help="MQTT 없이 인식 결과만 출력")
     parser.add_argument("--stats", action="store_true",
                         help="1초마다 fps·손·얼굴(가려진 얼굴)·대표자 상태를 한 줄씩 출력 (실기 확인용)")
@@ -90,8 +95,14 @@ def main() -> None:
     face_detector = FaceDetector()
     still_detector = FaceDetector()  # 촬영 스레드용
     smile = None if args.smile == "off" else SmileScorer(args.smile)
+    gaze = None
+    if args.gaze == "on":
+        try:
+            gaze = GazeMonitor()
+        except Exception as exc:
+            print(f"[{NODE}] 시선 판단 끔: {exc}")
     print(f"[{NODE}] 카메라 {camera.width}x{camera.height}, 얼굴 검출 {face_detector.name}, "
-          f"미소 {smile.name if smile else 'off'}")
+          f"미소 {smile.name if smile else 'off'}, 시선 {'on' if gaze else 'off'}")
 
     web = None
     if args.web:
@@ -112,13 +123,20 @@ def main() -> None:
             count = max(count, live["count"])
         info = {"face_count": count, "faces": faces}
         if smile is not None:
-            total, per_face = smile.score(frame, faces)
+            total, per_face, marks = smile.analyze(frame, faces)
             for f, value in zip(faces, per_face):
                 if value is not None:
                     f["smile"] = value
             if total is not None:
                 info["smile_score"] = total
-            print(f"[{NODE}] smile_score={total} 얼굴별 {per_face}")
+            looks = [is_looking(gaze_features(lm)) for lm in marks]
+            for f, look in zip(faces, looks):
+                if look is not None:
+                    f["looking"] = look
+            gaze_ok = photo_gaze(looks)
+            if gaze_ok is not None:
+                info["gaze_ok"] = gaze_ok
+            print(f"[{NODE}] smile_score={total} 얼굴별 {per_face} 시선 {looks}")
         return info
 
     def on_message(c, userdata, msg):
@@ -156,6 +174,8 @@ def main() -> None:
     last_seq = 0
     last_face_time = 0.0
     last_state = None
+    gaze_ok, gaze_detail = None, []
+    last_gaze_pub, last_gaze_sent = 0.0, "unset"
     fps, fps_time, fps_frames = 0.0, time.monotonic(), 0
     hand_fps, hand_frames = 0.0, 0
     label = ""
@@ -171,6 +191,9 @@ def main() -> None:
             state, session_id = session.get()
             if state != last_state:
                 stabilizer.reset()
+                if gaze is not None:
+                    gaze.reset()
+                gaze_ok, gaze_detail, last_gaze_sent = None, [], "unset"
                 last_state = state
             # 세션이 끝나거나(ID가 바뀜) 절전이면 대표자 해제. 대기 중 첫 세션 ID가 생길 때는 유지.
             if (last_session_id is not None and session_id != last_session_id) or state == "SLEEP":
@@ -193,6 +216,20 @@ def main() -> None:
                 if changed is not None:
                     publish(T.FACES, session_id=session_id, face_count=changed,
                             hidden=len(hidden_faces))
+
+            # 시선: 카운트다운 중에만. 계산은 GazeMonitor 스레드가 원본 해상도로 한다.
+            if gaze is not None and state in GAZE_STATES:
+                if last_faces:
+                    fx, fy = frame.shape[1] / PROCESS_SIZE[0], frame.shape[0] / PROCESS_SIZE[1]
+                    gaze.submit(frame, [{"x": int(f["x"] * fx), "y": int(f["y"] * fy),
+                                         "w": int(f["w"] * fx), "h": int(f["h"] * fy)} for f in last_faces])
+                gaze_ok, gaze_detail = gaze.result()
+                if gaze_ok is not None and now - last_gaze_pub >= GAZE_PUB_S and (
+                        gaze_ok != last_gaze_sent or now - last_gaze_pub >= 1.0):
+                    looking = sum(1 for _, lk, _ in gaze_detail if lk)
+                    publish(T.GAZE, quiet=gaze_ok == last_gaze_sent, session_id=session_id,
+                            gaze_ok=gaze_ok, looking=looking, faces=len(gaze_detail))
+                    last_gaze_pub, last_gaze_sent = now, gaze_ok
 
             # 제스처: 이 상태에서 받을 제스처가 있을 때만 손 모델을 돌린다
             confirmed = None
@@ -246,7 +283,7 @@ def main() -> None:
                           f"hands={len(seen_hands)} "
                           f"(leader={1 if chosen is not None and leader.leader is not None else 0}, other={gray}) "
                           f"faces={len(last_faces)}+{len(hidden_faces)}hidden leader={leader.status} "
-                          f"gesture={label or '-'} "
+                          f"gesture={label or '-'} gaze={gaze_ok} "
                           f"[{' '.join(_hand_tag(h, chosen) for h in seen_hands)}]", flush=True)
 
             if args.show or web:
@@ -268,6 +305,16 @@ def main() -> None:
                         cv2.rectangle(view, (x, y), (x + w, y + h), (0, 200, 255), 1)
                     else:
                         cv2.rectangle(view, (x, y), (x + w, y + h), (150, 150, 150), 1)
+                if state in GAZE_STATES and gaze_detail:   # 시선: 보면 초록, 아니면 빨강 + 이유
+                    fx, fy = PROCESS_SIZE[0] / frame.shape[1], PROCESS_SIZE[1] / frame.shape[0]
+                    for f, look, why in gaze_detail:
+                        color = (0, 220, 0) if look else (0, 0, 255) if look is False else (160, 160, 160)
+                        x, y = int(f["x"] * fx), int((f["y"] + f["h"]) * fy)
+                        cv2.putText(view, why, (x, min(PROCESS_SIZE[1] - 4, y + 12)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
+                    if gaze_ok is False:
+                        cv2.putText(view, "look at the camera", (6, 52),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                 if leader.status == "missing":
                     cv2.putText(view, "show leader hand again", (6, 34),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
@@ -290,6 +337,8 @@ def main() -> None:
         if web:
             web.close()
         hands.close()
+        if gaze is not None:
+            gaze.close()
         if smile is not None:
             smile.close()
         camera.close()

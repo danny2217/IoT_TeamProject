@@ -89,8 +89,18 @@ def connect(node_name: str, host: str = None, port: int = None,
     if on_message is not None:
         client.on_message = on_message
     client.reconnect_delay_set(min_delay=1, max_delay=10)
-    client.connect(host or BROKER_HOST, port or BROKER_PORT, keepalive=30)
-    return client
+    # 부팅 직후엔 와이파이·mDNS(raspi.local)·브로커가 아직 안 떠 있을 수 있다.
+    # 첫 연결이 실패해도 죽지 않고 될 때까지 다시 시도한다 (이후 끊김은 paho가 자동 재연결).
+    target = (host or BROKER_HOST, port or BROKER_PORT)
+    delay = 1.0
+    while True:
+        try:
+            client.connect(*target, keepalive=30)
+            return client
+        except OSError as exc:      # 이름 못 찾음, 연결 거부, 네트워크 없음
+            print(f"[{node_name}] MQTT {target[0]}:{target[1]} 연결 실패 ({exc}), {delay:.0f}초 후 재시도")
+            time.sleep(delay)
+            delay = min(delay * 2, 10.0)
 
 
 def disconnect(client: mqtt.Client, node_name: str) -> None:

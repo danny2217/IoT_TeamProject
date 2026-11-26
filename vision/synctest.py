@@ -32,22 +32,29 @@ def main() -> None:
     parser.add_argument("--gap", type=float, default=2.5, help="촬영 간격(초)")
     args = parser.parse_args()
 
-    session = time.strftime("SYNC-%H%M%S")
+    base = time.strftime("SYNC-%H%M%S")
+    # Node 4는 한 세션에 1·2번 컷만 받으므로 2컷마다 세션 이름을 바꾼다.
+    def ident(k: int) -> tuple[str, int]:
+        return f"{base}-{(k - 1) // 2 + 1}", (k - 1) % 2 + 1
+
+    index = {ident(k): k for k in range(1, args.count + 1)}
     done: dict[int, dict[str, dict]] = {}
     lock = threading.Lock()
 
     def on_message(client, userdata, msg):
         data = json.loads(msg.payload)
-        if data.get("session_id") != session:
+        k = index.get((data.get("session_id"), int(data.get("shot") or 0)))
+        if k is None:
             return
         with lock:
-            done.setdefault(int(data["shot"]), {})[data["node"]] = data
+            done.setdefault(k, {})[data["node"]] = data
 
     client = connect("synctest", args.host, args.port, on_message=on_message,
                      subscriptions=[(T.CAPTURE_DONE, 1)])
     client.loop_start()
     time.sleep(1.0)
-    for shot in range(1, args.count + 1):
+    for k in range(1, args.count + 1):
+        session, shot = ident(k)
         capture_at = now_ms() + args.lead
         client.publish(T.CAPTURE_CMD, make_payload(session_id=session, shot=shot,
                                                     capture_at=capture_at), qos=1)
@@ -56,7 +63,7 @@ def main() -> None:
     client.loop_stop()
     disconnect(client, "synctest")
 
-    print(f"세션 {session}")
+    print(f"세션 {base}-1 ~ {base}-{(args.count + 1) // 2} (2컷씩)")
     print(f"{'컷':>3} {'node2 지연':>10} {'node3 지연':>10} {'두 프레임 차':>12}")
     gaps = []
     for shot in range(1, args.count + 1):
