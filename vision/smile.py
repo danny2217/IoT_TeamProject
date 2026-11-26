@@ -1,8 +1,7 @@
 """미소 지수(smile_score, 0~100) — Best Smile 컷 고르기용.
 
 1. MediaPipe Face Mesh (제안서 방식): 입꼬리 랜드마크로 계산
-   - 구형 API(mp.solutions.face_mesh) 또는 새 Tasks API(FaceLandmarker, models/face_landmarker.task)
-     둘 다 같은 468개 랜드마크라 점수가 같다
+   - Face Mesh 실행은 vision/facemesh.py (얼굴마다 잘라 키워서 → 작은 얼굴도 점수가 나온다)
    - 입 너비 / 두 눈 바깥 끝 거리     → 웃으면 입이 옆으로 넓어진다
    - 입꼬리 높이 (입 중앙 대비)       → 웃으면 입꼬리가 올라간다
 2. Face Mesh가 없으면 OpenCV Haar 미소 검출 (Node 4 대체 방식과 같은 점수표)
@@ -32,7 +31,6 @@ WIDTH_LO, WIDTH_HI = 0.52, 0.68    # 입 너비: 무표정 ~ 활짝
 LIFT_LO, LIFT_HI = -0.04, 0.01     # 입꼬리 높이: 무표정 ~ 활짝
 WIDTH_WEIGHT = 0.55                # 나머지는 입꼬리 높이
 
-FACE_TASK_MODEL = Path(__file__).resolve().parent / "models" / "face_landmarker.task"
 HAAR_NONE, HAAR_BASE, HAAR_STEP = 32.0, 58.0, 14.0   # node4/faces.py 와 같은 점수표
 
 
@@ -80,67 +78,29 @@ def match_to_faces(mesh_centers, faces) -> list[int | None]:
     return out
 
 
-def _tasks_runs_here() -> bool:
-    """FaceLandmarker를 별도 프로세스에서 한 번 만들어 본다.
-
-    mediapipe 1.x 휠은 AES 명령이 있는 CPU용이라 Pi 3B에서는 예외가 아니라
-    Illegal instruction으로 프로세스가 통째로 죽는다. 그래서 try로는 못 잡고 따로 돌려 본다.
-    """
-    import subprocess
-    import sys
-    code = ("from mediapipe.tasks import python as p; from mediapipe.tasks.python import vision as v;"
-            f"v.FaceLandmarker.create_from_options(v.FaceLandmarkerOptions("
-            f"base_options=p.BaseOptions(model_asset_path={str(FACE_TASK_MODEL)!r})))")
-    try:
-        return subprocess.run([sys.executable, "-c", code], capture_output=True,
-                              timeout=60).returncode == 0
-    except Exception:
-        return False
-
-
 class SmileScorer:
-    """촬영 스레드에서 사진 한 장마다 부른다. 안에서 잠그므로 여러 스레드에서 써도 된다."""
+    """촬영 스레드에서 사진 한 장마다 부른다. 안에서 잠그므로 여러 스레드에서 써도 된다.
+
+    얼굴 상자가 있으면 얼굴마다 잘라 키워서 Face Mesh를 돌린다 (vision/facemesh.py)
+    → 1m 밖 작은 얼굴도 점수가 나온다. 같은 랜드마크로 시선(gaze.py)도 판단할 수 있게 돌려준다.
+    """
 
     def __init__(self, prefer: str = "auto", max_faces: int = 6, max_width: int = 960):
         self.max_width = max_width
         self._lock = threading.Lock()
         self._mesh = None
-        self._tasks = None
         self._haar = None
         self.name = "none"
         if prefer in ("auto", "mesh"):
-            errors = []
             try:
-                import mediapipe as mp
-                self._mesh = mp.solutions.face_mesh.FaceMesh(
-                    static_image_mode=True, max_num_faces=max_faces,
-                    refine_landmarks=False, min_detection_confidence=0.5)
-                self.name = "facemesh"
-                return
-            except Exception as exc:  # 설치 안 됨 / 구형 API 없음 (mediapipe 0.10.20 이후)
-                errors.append(f"solutions: {exc}")
-            try:
-                if not FACE_TASK_MODEL.exists():
-                    raise FileNotFoundError(f"{FACE_TASK_MODEL} 가 없습니다")
-                if not _tasks_runs_here():
-                    raise RuntimeError("이 CPU에서 MediaPipe Tasks가 죽음 (Pi 3B + mediapipe 1.x: AES 명령 없음)")
-                import mediapipe as mp
-                from mediapipe.tasks import python as mp_python
-                from mediapipe.tasks.python import vision as mp_vision
-                if not FACE_TASK_MODEL.exists():
-                    raise FileNotFoundError(f"{FACE_TASK_MODEL} 가 없습니다")
-                options = mp_vision.FaceLandmarkerOptions(
-                    base_options=mp_python.BaseOptions(model_asset_path=str(FACE_TASK_MODEL)),
-                    running_mode=mp_vision.RunningMode.IMAGE, num_faces=max_faces)
-                self._tasks = mp_vision.FaceLandmarker.create_from_options(options)
-                self._mp = mp
-                self.name = "facemesh-tasks"
+                from vision.facemesh import FaceMesh
+                self._mesh = FaceMesh(refine=True, max_faces=max_faces)
+                self.name = self._mesh.name
                 return
             except Exception as exc:
-                errors.append(f"tasks: {exc}")
-            if prefer == "mesh":
-                raise RuntimeError("Face Mesh 사용 불가: " + "; ".join(errors))
-            print(f"[smile] Face Mesh 사용 불가 ({'; '.join(errors)}) → Haar 미소 검출")
+                if prefer == "mesh":
+                    raise
+                print(f"[smile] {exc} → Haar 미소 검출")
         import cv2
         path = Path(cv2.data.haarcascades) / "haarcascade_smile.xml" if hasattr(cv2, "data") else None
         if path is not None and path.exists():
@@ -151,40 +111,27 @@ class SmileScorer:
 
     def score(self, bgr, faces=None) -> tuple[int | None, list]:
         """(사진 점수, 얼굴 상자별 점수 목록). faces는 FaceDetector 결과(원본 픽셀 좌표)."""
+        total, per_face, _ = self.analyze(bgr, faces)
+        return total, per_face
+
+    def analyze(self, bgr, faces=None) -> tuple[int | None, list, list]:
+        """(사진 점수, 얼굴별 점수, 얼굴별 랜드마크 또는 None). Haar면 랜드마크는 모두 None."""
         faces = list(faces or [])
         with self._lock:
-            if self._mesh is not None or self._tasks is not None:
+            if self._mesh is not None:
                 return self._score_mesh(bgr, faces)
             if self._haar is not None:
-                return self._score_haar(bgr, faces)
-        return None, [None] * len(faces)
+                total, per_face = self._score_haar(bgr, faces)
+                return total, per_face, [None] * len(faces)
+        return None, [None] * len(faces), [None] * len(faces)
 
     def _score_mesh(self, bgr, faces):
-        import cv2
-        h, w = bgr.shape[:2]
-        scale = min(1.0, self.max_width / w)
-        small = cv2.resize(bgr, (int(w * scale), int(h * scale))) if scale < 1 else bgr
-        sh, sw = small.shape[:2]
-        scores, centers = [], []
-        for marks in self._landmarks(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)):
-            lm = [(p.x * sw / scale, p.y * sh / scale) for p in marks]
-            scores.append(score_from_landmarks(lm))
-            xs, ys = [p[0] for p in lm], [p[1] for p in lm]
-            centers.append(((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
-        if not faces:
-            return photo_score(scores), []
-        per_face = [None if i is None else scores[i] for i in match_to_faces(centers, faces)]
-        # 얼굴 상자와 안 맞아도 Face Mesh가 찾은 얼굴은 사진 점수에 넣는다
-        return photo_score(scores) if scores else None, per_face
-
-    def _landmarks(self, rgb):
-        """얼굴마다 정규화 좌표(0~1) 랜드마크 목록."""
-        if self._mesh is not None:
-            result = self._mesh.process(rgb)
-            return [m.landmark for m in result.multi_face_landmarks or []]
-        import numpy as np
-        image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
-        return list(self._tasks.detect(image).face_landmarks or [])
+        if not faces:   # 얼굴 상자가 없으면 사진 전체에서 찾는다
+            marks = self._mesh.whole(bgr, self.max_width)
+            return photo_score([score_from_landmarks(lm) for lm in marks]), [], []
+        marks = self._mesh.for_faces(bgr, faces)
+        per_face = [None if lm is None else score_from_landmarks(lm) for lm in marks]
+        return photo_score(per_face), per_face, marks
 
     def _score_haar(self, bgr, faces):
         import cv2
@@ -204,8 +151,6 @@ class SmileScorer:
     def close(self):
         if self._mesh is not None:
             self._mesh.close()
-        if self._tasks is not None:
-            self._tasks.close()
 
 
 def _main() -> None:
@@ -230,9 +175,10 @@ def _main() -> None:
         total, per_face = scorer.score(image, faces)
         print(f"{name}: smile_score={total} 얼굴 {len(faces)}명 {per_face}")
         if scorer.name.startswith("facemesh"):
-            h, w = image.shape[:2]
-            for marks in scorer._landmarks(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)):
-                lm = [(p.x * w, p.y * h) for p in marks]
+            for lm in scorer._mesh.for_faces(image, faces):
+                if lm is None:
+                    print("    (Face Mesh 못 찾음)")
+                    continue
                 width, lift = mouth_features(lm)
                 print(f"    입 너비 {width:.3f}  입꼬리 {lift:+.3f}  → {score_from_landmarks(lm)}")
 

@@ -164,11 +164,13 @@ def schedule_capture(camera: Camera, cmd: dict, *, node: str, angle: str, out_di
                       late_ms=late_ms, ts=shot_ts)
 
         if node4_url:
-            try:
-                upload_photo(node4_url, path, fields)
-            except Exception as exc:
-                print(f"[{node}] Node 4 전송 실패: {exc}")
-                return
+            # 와이파이가 잠깐 끊겨도 몇 번 다시 보낸다. 끝내 실패해도 "촬영 완료"는 보내서
+            # Node 1이 카메라 고장(no photo)이 아니라 합성 단계 오류로 처리하게 한다.
+            ok, error = upload_with_retry(node4_url, path, fields)
+            fields["uploaded"] = ok
+            if not ok:
+                fields["upload_error"] = error
+                print(f"[{node}] Node 4 전송 실패 ({UPLOAD_ATTEMPTS}번 시도): {error}")
         if client is not None:
             client.publish(T.CAPTURE_DONE, make_payload(**fields), qos=1)
 
@@ -177,7 +179,29 @@ def schedule_capture(camera: Camera, cmd: dict, *, node: str, angle: str, out_di
     return thread
 
 
-def upload_photo(node4_url: str, path: Path, fields: dict) -> None:
+UPLOAD_ATTEMPTS = 3          # 전송 시도 횟수
+UPLOAD_TIMEOUT_S = 2.0       # 한 번 시도의 제한 시간
+UPLOAD_BACKOFF_S = (0.5, 1.0)  # 재시도 전 대기 → 최악 3×2 + 1.5 = 7.5초 (Node 1 촬영 대기 10초 안)
+
+
+def upload_with_retry(node4_url: str, path: Path, fields: dict, *, attempts: int = UPLOAD_ATTEMPTS,
+                      timeout: float = UPLOAD_TIMEOUT_S, backoff=UPLOAD_BACKOFF_S,
+                      upload=None, sleep=time.sleep) -> tuple[bool, str | None]:
+    """upload_photo 를 최대 attempts 번 시도한다. (성공 여부, 마지막 오류 문구)."""
+    upload = upload or upload_photo
+    error = None
+    for i in range(attempts):
+        try:
+            upload(node4_url, path, fields, timeout=timeout)
+            return True, None
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            if i < attempts - 1:
+                sleep(backoff[min(i, len(backoff) - 1)])
+    return False, error
+
+
+def upload_photo(node4_url: str, path: Path, fields: dict, timeout: float = 10) -> None:
     """Node 4의 POST /api/photos (multipart) 로 사진과 분석 결과를 보낸다."""
     import requests
 
@@ -193,5 +217,5 @@ def upload_photo(node4_url: str, path: Path, fields: dict) -> None:
     with open(path, "rb") as handle:
         response = requests.post(node4_url.rstrip("/") + "/api/photos", data=form,
                                  files={"file": (fields["file"], handle, "image/jpeg")},
-                                 timeout=10)
+                                 timeout=timeout)
     response.raise_for_status()
